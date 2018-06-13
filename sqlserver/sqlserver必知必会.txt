@@ -1,0 +1,280 @@
+1.查询某库中所有表
+use db_name  
+go  
+select * from sys.tables
+
+2.查询数据库的数据文件及日志文件的相关信息（包括文件组、当前文件大小、文件最大值、文件增长设置、文件逻辑名、文件路径等）   
+select * from [ChryslerBcc].[dbo].[sysfiles]
+
+转换文件大小单位为MB：
+     select name, convert(float,size) * (8192.0/1024.0)/1024. from [数据库名].dbo.sysfiles
+
+3.查询当前数据库的磁盘使用情况：
+Exec sp_spaceused
+
+
+4.查询数据库服务器各数据库日志文件的大小及利用率
+DBCC SQLPERF(LOGSPACE)
+
+5.获取所有表名: 
+SELECT Name FROM ChryslerBcc.dbo.SysObjects Where XType='U' ORDER BY Name 
+XType='U':表示所有用户表; 
+XType='S':表示所有系统表;
+
+
+6.获取所有数据库名: 
+SELECT Name FROM ChryslerBcc.dbo.SysDatabases ORDER BY Name
+
+7.获取表结构
+exec sp_help product  ---存储过程获取
+select a.name as [column],b.name as type from syscolumns a,systypes b where a.id=object_id('product') and a.xtype=b.xtype 
+
+8.获取主键字段
+exec sp_helpindex     'product'  --存储过程获取
+SELECT name FROM syscolumns WHERE id=Object_Id('product') and colid IN(SELECT keyno from sysindexkeys WHERE id=Object_Id('product'))   
+
+
+9.获取数据库所有类型
+select name from systypes
+
+10.查询SQL SERVER 数据库版本
+SELECT   
+SERVERPROPERTY('servername') AS 实例名,  
+SERVERPROPERTY('ProductVersion') AS 实例版本,  
+SERVERPROPERTY('Edition') AS 产品版本,  
+SERVERPROPERTY('ProductLevel') AS 版本级别,  
+@@VERSION AS 版本信息
+
+exec xp_msver  
+
+SELECT  SERVERPROPERTY('Edition') AS Edition ,  
+CASE SERVERPROPERTY('EditionID')  
+  	WHEN 1804890536   THEN 'Enterprise Edittion: CAL Lincenseing'  
+  	WHEN 1872460670   THEN 'Enterprise Edition: Core-based Licensing'  
+ 	WHEN 610778273    THEN 'Enterprise Evaluation'  
+ 	WHEN 284895786    THEN 'Business Intelligence'  
+ 	WHEN -2117995310  THEN 'Developer'  
+  	WHEN -1592396055  THEN 'Express'  
+  	WHEN -133711905   THEN 'Express with Advanced Services'  
+  	WHEN -1534726760  THEN 'Standard'  
+  	WHEN 1293598313   THEN 'Web'  
+  	ELSE '' END AS License    	
+
+
+11.备份数据库工具
+SQL BAK Reader   url:http://www.yohz.com/sbr_details.htm
+
+
+12.监控死锁
+exec sp_who2
+
+use [master]  
+GO  
+SELECT   
+  DB_NAME(Blocked.database_id)                    AS 'database',  
+Blocked.Session_ID                              AS 'blocked SPID',  
+    Blocked_SQL.TEXT                                AS 'blocked SQL',  
+    Waits.wait_type                 AS 'wait resource',  
+    Blocking.Session_ID                             AS 'blocking SPID',  
+    Blocking_SQL.TEXT                               AS 'blocking SQL',  
+    sess.status                 AS 'blocking status',  
+    sess.total_elapsed_time             AS 'blocking elapsed time',  
+    sess.logical_reads              AS 'blocking logical reads',  
+    sess.memory_usage               AS 'blocking memory usage',  
+    sess.cpu_time                   AS 'blocking cpu time',  
+    sess.program_name               AS 'blocking program',  
+    GETDATE()                                       AS 'timestamp'  
+FROM sys.dm_exec_connections AS Blocking   
+    INNER JOIN sys.dm_exec_requests AS Blocked ON Blocked.Blocking_Session_ID = Blocking.Session_ID  
+        INNER JOIN sys.dm_os_waiting_tasks AS Waits ON waits.Session_ID = Blocked.Session_ID  
+        INNER JOIN sys.dm_exec_sessions sess ON sess.session_id = Blocking.Session_ID  
+        CROSS APPLY sys.dm_exec_sql_text(Blocking.most_recent_sql_handle) AS Blocking_SQL  
+        CROSS APPLY sys.dm_exec_sql_text(Blocked.sql_handle) AS Blocked_SQL  
+GO  
+﻿﻿
+
+13.查找杀死阻塞进程
+查找阻塞进程:
+SELECT blocking_session_id '阻塞进程的ID', wait_duration_ms '等待时间(毫秒)', session_id '(会话ID)' FROM sys.dm_os_waiting_tasks
+
+杀死阻塞进程:
+KILL 57
+
+
+--查看锁信息
+create table #t(req_spid int,obj_name sysname)
+
+declare @s nvarchar(4000)
+    ,@rid int,@dbname sysname,@id int,@objname sysname
+
+declare tb cursor for 
+    select distinct req_spid,dbname=db_name(rsc_dbid),rsc_objid
+    from master..syslockinfo where rsc_type in(4,5)
+open tb
+fetch next from tb into @rid,@dbname,@id
+while @@fetch_status=0
+begin
+    set @s='select @objname=name from ['+@dbname+']..sysobjects where id=@id'
+    exec sp_executesql @s,N'@objname sysname out,@id int',@objname out,@id
+    insert into #t values(@rid,@objname)
+    fetch next from tb into @rid,@dbname,@id
+end
+close tb
+deallocate tb
+
+select 进程id=a.req_spid
+    ,数据库=db_name(rsc_dbid)
+    ,类型=case rsc_type when 1 then 'NULL 资源（未使用）'
+        when 2 then '数据库'
+        when 3 then '文件'
+        when 4 then '索引'
+        when 5 then '表'
+        when 6 then '页'
+        when 7 then '键'
+        when 8 then '扩展盘区'
+        when 9 then 'RID（行 ID)'
+        when 10 then '应用程序'
+    end
+    ,对象id=rsc_objid
+    ,对象名=b.obj_name
+    ,rsc_indid
+from master..syslockinfo a left join #t b on a.req_spid=b.req_spid
+
+go
+drop table #t
+
+
+
+/**
+创建临时监控表
+**/
+ use master
+create procedure sp_who_lock  
+as  
+begin  
+declare @spid int,@bl int,  
+@intTransactionCountOnEntry int,  
+        @intRowcount    int,  
+        @intCountProperties   int,  
+        @intCounter    int  
+  
+create table #tmp_lock_who (  
+id int identity(1,1),  
+spid smallint,  
+bl smallint)  
+  
+IF @@ERROR<>0 RETURN @@ERROR  
+  
+insert into #tmp_lock_who(spid,bl) select 0 ,blocked  
+   from (select * from sysprocesses where blocked>0 ) a   
+   where not exists(select * from (select * from sysprocesses where blocked>0 ) b   
+   where a.blocked=spid)  
+   union select spid,blocked from sysprocesses where blocked>0  
+  
+IF @@ERROR<>0 RETURN @@ERROR   
+  
+-- 找到临时表的记录数  
+select @intCountProperties = Count(*),@intCounter = 1  
+from #tmp_lock_who  
+  
+IF @@ERROR<>0 RETURN @@ERROR   
+  
+if @intCountProperties=0  
+select '现在没有阻塞和死锁信息' as message  
+  
+-- 循环开始  
+while @intCounter <= @intCountProperties  
+begin  
+-- 取第一条记录  
+select @spid = spid,@bl = bl  
+from #tmp_lock_who where Id = @intCounter   
+begin  
+if @spid =0   
+            select '引起数据库死锁的是: '+ CAST(@bl AS VARCHAR(10)) + '进程号,其执行的SQL语法如下'  
+else  
+            select '进程号SPID：'+ CAST(@spid AS VARCHAR(10))+ '被' + '进程号SPID：'+ CAST(@bl AS VARCHAR(10)) +'阻塞,其当前进程执行的SQL语法如下'  
+DBCC INPUTBUFFER (@bl )  
+end   
+  
+-- 循环指针下移  
+set @intCounter = @intCounter + 1  
+end  
+  
+drop table #tmp_lock_who  
+  
+return 0  
+end  
+
+
+杀死锁和进程：
+
+use master
+go
+
+if exists (select * from dbo.sysobjects where id = object_id(N'[dbo].[p_killspid]') and OBJECTPROPERTY(id, N'IsProcedure') = 1)
+drop procedure [dbo].[p_killspid]
+GO
+
+create proc p_killspid
+@dbname varchar(200)    --要关闭进程的数据库名
+as 
+    declare @sql nvarchar(500) 
+    declare @spid nvarchar(20)
+
+    declare #tb cursor for
+        select spid=cast(spid as varchar(20)) from master..sysprocesses where dbid=db_id(@dbname)
+    open #tb
+    fetch next from #tb into @spid
+    while @@fetch_status=0
+    begin 
+        exec('kill '+@spid)
+        fetch next from #tb into @spid
+    end 
+    close #tb
+    deallocate #tb
+go
+
+
+exec p_killspid 'newdbpy' 
+
+
+
+14.查看每条sql执行效率
+
+SELECT creation_time N'语句编译时间',
+ last_execution_time N'上次执行时间',
+ total_physical_reads N'物理读取总次数',
+ total_logical_reads / execution_count N'每次逻辑读次数',
+ total_logical_reads N'逻辑读取总次数',
+ total_logical_writes N'逻辑写入总次数',
+ execution_count N'执行次数',
+ total_worker_time / 1000 N'所用的CPU总时间ms',
+ total_elapsed_time / 1000 N'总花费时间ms',
+(
+	total_elapsed_time / execution_count
+) / 1000 N'平均时间ms' ,SUBSTRING(
+	st.text,
+	(qs.statement_start_offset / 2) + 1,
+	(
+		(
+			CASE statement_end_offset WHEN - 1 THEN DATALENGTH(st.text) ELSE qs.statement_end_offset END - qs.statement_start_offset
+		) / 2
+	) + 1
+) N'执行语句' FROM sys.dm_exec_query_stats AS qs CROSS APPLY sys.dm_exec_sql_text(qs.sql_handle) st WHERE SUBSTRING(
+	st.text,
+	(qs.statement_start_offset / 2) + 1,
+	(
+		(
+			CASE statement_end_offset WHEN - 1 THEN DATALENGTH(st.text) ELSE qs.statement_end_offset END - qs.statement_start_offset
+		) / 2
+	) + 1
+) NOT LIKE '%fetch%' ORDER BY total_elapsed_time / execution_count DESC;
+
+
+
+14,sqlserver 查询所有表明及列名 字段类型
+SELECT table_name,column_name,data_type FROM INFORMATION_SCHEMA.columns where table_name in (
+
+SELECT name FROM ChryslerBcc.dbo.SysObjects Where XType='U' and crdate>='2017-05-12' 
+
+) 
